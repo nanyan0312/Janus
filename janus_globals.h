@@ -25,6 +25,10 @@
 #define JANUS_LUA_ERRNO_UPDATE "1"
 #define JANUS_LUA_ERRNO_REJECT "2"
 
+#define JANUS_BUILTIN_ATOMIC_LOCKCHECK_YES "janus_builtin_atomic_lockcheck_yes"
+#define JANUS_BUILTIN_ATOMIC_LOCKCHECK_NO "janus_builtin_atomic_lockcheck_no"
+#define JANUS_BUILTIN_ATOMIC_LOCKCHECK_FAILED "janus_builtin_atomic_lockcheck_failed"
+
 #endif  //__JANUS_GLOBAL_H_
 
 /* vim: set expandtab ts=4 sw=4 sts=4 tw=100: */

@@ -6,7 +6,7 @@ INCPATH=-I.  -I./include
 LIBS=-L./lib -lhiredis
 OBJS=janus_lock.o janus_redis_cluster.o janus_locker.o janus_utils.o demo.o
 LIBOBJS=$(filter-out demo.o, $(OBJS))
-INCFILES=janus_lock.h janus_redis_cluster.h janus_locker.h
+INCFILES=janus_locker.h
 
 .PHONY: all clean
 

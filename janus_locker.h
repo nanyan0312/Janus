@@ -23,11 +23,15 @@ typedef enum {
 
 class JanusLocker {
     public:
-        JanusLocker(JanusLock *lock, JanusRedisCluster *rc);
+        JanusLocker(const string lock_name, const unsigned long lock_timeout_in_us);
         ~JanusLocker();
+        void setLockTimeout(unsigned long lock_timeout_in_us);
+        int register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth = true);
+        int register_script(string script_pathname);
         bool acquire_lock(bool blocking);
         bool renew_lock();
         bool release_lock();
+        int batch_exec_redis_script(string script_pathname, int num_keys, vector<string>& argv, vector<vector<string> >& replies, bool with_lock= false);
 
     private:
         int _do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value);
@@ -38,6 +42,7 @@ class JanusLocker {
         void _make_proposal_id(); 
         unsigned long _make_now_us(); 
         
+    private:
         JanusLock *_lock;
         JanusRedisCluster *_rc;
 

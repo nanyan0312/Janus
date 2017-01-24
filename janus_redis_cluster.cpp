@@ -13,6 +13,7 @@
 extern map<string, string> g_janus_builtin_lua_map;
 extern const string g_janus_builtin_lua_names[];
 extern const string g_janus_builtin_lua_content[];
+extern const string g_janus_builtin_lua_atomic_lockcheck;
 
 static void copy_redis_reply(redisReply *dest, redisReply *src) {
     if (NULL == dest || NULL == src) {
@@ -277,7 +278,7 @@ JanusRedisCluster::~JanusRedisCluster() {
     _cluster_script_sha_map.clear();
 }
 
-int JanusRedisCluster::register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth) {
+int JanusRedisCluster::register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth = true) {
     if (NULL == host || NULL == user || NULL == password) {
         return JANUS_RET_ERR;
     }
@@ -542,6 +543,7 @@ int JanusRedisCluster::_load_script_cluster() {
         } else {
             ifstream script_file(it->first.c_str());
             stringstream cmd;
+            cmd << g_janus_builtin_lua_atomic_lockcheck << " ";
             cmd << script_file.rdbuf();
             script = cmd.str();
         }

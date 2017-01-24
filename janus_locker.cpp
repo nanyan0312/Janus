@@ -13,8 +13,8 @@
 #include <unistd.h>
 #include <iostream>
 
-JanusLocker::JanusLocker(JanusLock *lock, JanusRedisCluster *rc) 
-    : _lock(lock), _rc(rc) {
+JanusLocker::JanusLocker(const string lock_name, const unsigned long lock_timeout_in_us) 
+    : _lock(new JanusLock(lock_name, lock_timeout_in_us)), _rc(new JanusRedisCluster()) {
         _now_us = _make_now_us();
         _own_pid = getpid();
         get_local_ip_addr(_own_ip_addr);
@@ -32,6 +32,18 @@ JanusLocker::JanusLocker(JanusLock *lock, JanusRedisCluster *rc)
 JanusLocker::~JanusLocker() {
     _lock = NULL;
     _rc = NULL;
+}
+
+void JanusLocker::setLockTimeout(unsigned long lock_timeout_in_us) {
+    _lock->setTimeout(lock_timeout_in_us);
+}
+
+int JanusLocker::register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth) {
+    return _rc->register_node(host, port, user, password, need_auth);
+}
+
+int JanusLocker::register_script(string script_pathname) {
+    return _rc->register_script(script_pathname);
 }
 
 bool JanusLocker::acquire_lock(bool blocking) {
@@ -183,6 +195,48 @@ bool JanusLocker::release_lock() {
     }
 
     return true;
+}
+
+int JanusLocker::batch_exec_redis_script(string script_pathname, int num_keys, vector<string>& argv, vector<vector<string> >& replies, bool with_lock) {
+    string atomic_lockcheck_switch = (true == with_lock) ? JANUS_BUILTIN_ATOMIC_LOCKCHECK_YES : JANUS_BUILTIN_ATOMIC_LOCKCHECK_NO;
+    argv.push_back(atomic_lockcheck_switch);
+    argv.push_back(_lock->get_lock_name());
+    stringstream convert;
+    convert << _instance_id;
+    argv.push_back(convert.str());
+    convert.str(string());
+    convert.clear();
+
+    int ret = _rc->batch_exec_script(script_pathname, 0, argv, replies);
+    if (JANUS_RET_ERR == ret) {
+        return JANUS_RET_ERR;
+    }
+
+    /*if no lockcheck, return*/
+    if (false == with_lock) {
+        return JANUS_RET_OK;
+    }
+
+    /*if has lockcheck, make sure all lockchecks passed on all redis nodes*/
+    bool error = false;
+    unsigned int vec_vec_size = replies.size();
+    vector<string> reply;
+    unsigned int vec_size;
+    for (unsigned int i = 0; i < vec_vec_size; i++) {
+        reply = replies[i];
+        vec_size = reply.size();
+        if (2 == vec_size && JANUS_LUA_ERRNO_ERROR == reply[0]
+                && JANUS_BUILTIN_ATOMIC_LOCKCHECK_FAILED == reply[1].substr(0, strlen(JANUS_BUILTIN_ATOMIC_LOCKCHECK_FAILED))) {
+            error = true;
+            break;
+        }
+    }
+
+    if (true == error) {
+        return JANUS_RET_ERR;
+    }
+
+    return JANUS_RET_OK; 
 }
 
 int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value) {

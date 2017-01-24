@@ -67,12 +67,12 @@ class JanusRedisCluster {
         JanusRedisCluster();
         ~JanusRedisCluster();
         
-        int register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth = true);
+        int register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth);
         int register_script(string script_pathname);
         int reconnect_cluster();
         int disconnect_cluster();
         int batch_exec_cmd(string command, vector<vector<string> >& replies);
-        int JanusRedisCluster::batch_exec_script(string script_pathname, int num_keys, vector<string>& argv, vector<vector<string> >& replies);
+        int batch_exec_script(string script_pathname, int num_keys, vector<string>& argv, vector<vector<string> >& replies);
         unsigned int get_cluster_size();
         unsigned int get_cluster_size_recveived();
         unsigned int get_incr_cluster_size_recveived();
@@ -85,6 +85,7 @@ class JanusRedisCluster {
         int _load_script_cluster();
         int _batch_exec(string command, vector<redisReply*> *replies);
         
+    private:
         vector<JanusRedisNode*> _cluster;
         unsigned int _cluster_seq;
         unsigned int _cluster_size;

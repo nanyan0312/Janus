@@ -16,16 +16,36 @@ using namespace std;
 
 int main(int argc, char**) {
 
-    //init the lock object, second argument means we want lock lease to be 1 second
-    JanusLock jl("nylock", 1000000);
-
-    //init the redis cluster object
-    JanusRedisCluster jrc;
-    jrc.register_node("127.0.0.1", 7771, "pay", "pay");
-    jrc.register_node("127.0.0.1", 7772, "pay", "pay");
-    jrc.register_node("127.0.0.1", 7773, "pay", "pay");
-
-    //fork worker to contend for lock
+    /*
+     * single process example
+     */
+    /*
+    JanusLocker jlr("nylock", 1000000);
+    jlr.register_node("127.0.0.1", 7771, "pay", "pay");
+    jlr.register_node("127.0.0.1", 7772, "pay", "pay");
+    jlr.register_node("127.0.0.1", 7773, "pay", "pay");
+    jlr.register_script("./lua/demo.lua");
+    jlr.acquire_lock(true);
+    vector<string> argv;
+    argv.push_back("first_argv");
+    argv.push_back("second_argv");
+    argv.push_back("last_argv");
+    vector<vector<string> > replies;
+    jlr.batch_exec_redis_script("./lua/demo.lua", 0, argv, replies, true);
+    cout << "batch_exec_redis_script result:" << endl;
+    for (unsigned int i = 0; i < replies.size(); i++) {
+        cout << i << endl;
+        for (unsigned int j = 0; j < replies[i].size(); j++) {
+            cout << replies[i][j] << endl;
+        }
+    }
+    jlr.release_lock();
+    */
+   
+    /*
+     * multi processes example
+     */
+    //fork workers to contend for lock
     int i = 0;
     while (i++ < 3) {
         pid_t pid = fork();
@@ -34,20 +54,47 @@ int main(int argc, char**) {
         } else if (0 < pid) {
         } else {
             cout << getpid() << " BORN." << endl;
-            JanusLocker jlr(&jl, &jrc);
+            //init a locker by naming its target lock and setting a expiration time for the lock
+            JanusLocker jlr("nylock", 1000000);
+
+            //register the redis cluster
+            jlr.register_node("127.0.0.1", 7771, "pay", "pay");
+            jlr.register_node("127.0.0.1", 7772, "pay", "pay");
+            jlr.register_node("127.0.0.1", 7773, "pay", "pay");
+
+            //register scripts we are gonna use
+            jlr.register_script("./lua/demo.lua");
+            
             bool has_lock = false;
             while (true) {
                 if (false == has_lock) {
                     has_lock = jlr.acquire_lock(true);
+                    cout << getpid() << " ACQUIRED." << endl;
                 } else {
                     has_lock = jlr.renew_lock();
+                    if (false == has_lock) {
+                        cout << getpid() << " RENEW FAILED." << endl;
+                        continue;
+                    }
+                    cout << getpid() << " RENEWED." << endl;
                 }
 
-                if (false == has_lock) {
-                    continue;
+                //test the atomic lockcheck functionality
+                vector<string> argv;
+                argv.push_back("first_argv");
+                argv.push_back("second_argv");
+                argv.push_back("last_argv");
+                vector<vector<string> > replies;
+                jlr.batch_exec_redis_script("./lua/demo.lua", 0, argv, replies, true);
+                cout << "batch_exec_redis_script result:" << endl;
+                for (unsigned int i = 0; i < replies.size(); i++) {
+                    cout << i << endl;
+                    for (unsigned int j = 0; j < replies[i].size(); j++) {
+                        cout << replies[i][j] << endl;
+                    }
                 }
-
-                //simulate doing work, 0.5 second
+                
+                //simulate doing more work, 0.5 second
                 usleep(500000);
             }
         }
