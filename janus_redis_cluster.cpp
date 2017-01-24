@@ -8,6 +8,11 @@
 
 #include "janus_redis_cluster.h"
 #include "janus_globals.h"
+#include "janus_builtin_lua.h"
+
+extern map<string, string> g_janus_builtin_lua_map;
+extern const string g_janus_builtin_lua_names[];
+extern const string g_janus_builtin_lua_content[];
 
 static void copy_redis_reply(redisReply *dest, redisReply *src) {
     if (NULL == dest || NULL == src) {
@@ -252,6 +257,10 @@ JanusRedisCluster::JanusRedisCluster() {
     _cluster_state = CLUSTER_STATE_NONE;
     _vec_replies_ptr = NULL;
     _cluster_script_sha_map.clear();
+    for (unsigned int i = 0; "" != g_janus_builtin_lua_names[i]; i++) {
+        g_janus_builtin_lua_map[g_janus_builtin_lua_names[i]] = g_janus_builtin_lua_content[i];
+        register_script(g_janus_builtin_lua_names[i]);
+    }
 }
 
 JanusRedisCluster::~JanusRedisCluster() {
@@ -264,6 +273,8 @@ JanusRedisCluster::~JanusRedisCluster() {
     for (unsigned int i = 0; i < _cluster.size(); i++) {
         delete _cluster[i];
     }
+    
+    _cluster_script_sha_map.clear();
 }
 
 int JanusRedisCluster::register_node(const char *host, unsigned int port, const char *user, const char *password, bool need_auth) {
@@ -524,15 +535,23 @@ int JanusRedisCluster::_load_script_cluster() {
     vector<redisReply*> r_replies;
     map<string, string>::iterator it = _cluster_script_sha_map.begin();
     for (; it != _cluster_script_sha_map.end(); it++) {
-        ifstream script_file(it->first.c_str());
-        stringstream cmd;
-        cmd << script_file.rdbuf();
+        string script;
+        map<string, string>::iterator it2 = g_janus_builtin_lua_map.find(it->first);
+        if (g_janus_builtin_lua_map.end() != it2) {
+            script = it2->second;
+        } else {
+            ifstream script_file(it->first.c_str());
+            stringstream cmd;
+            cmd << script_file.rdbuf();
+            script = cmd.str();
+        }
+        
         r_replies.clear();
         _vec_replies_ptr = &r_replies;
         _cluster_size_recveived = 0;
 
         for (unsigned int i = 0; i < _cluster_size; i++) {
-            if (JANUS_RET_ERR == _cluster[i]->load_script(cmd.str())) {
+            if (JANUS_RET_ERR == _cluster[i]->load_script(script)) {
                 _cluster_size_recveived++;
             }
         }

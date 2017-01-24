@@ -207,7 +207,7 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
     convert.clear();
 
     vector<vector<string> > replies;
-    int ret = _rc->batch_exec_script("./lua/janus_paxos_prepare.lua", 0, argv, replies);
+    int ret = _rc->batch_exec_script("janus_builtin_paxos_prepare.lua", 0, argv, replies);
     if (JANUS_RET_ERR == ret) {
         return JANUS_RET_ERR;
     }
@@ -303,7 +303,7 @@ int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_
     argv.push_back(proposal_value);
 
     vector<vector<string> > replies;
-    int ret = _rc->batch_exec_script("./lua/janus_paxos_accept.lua", 0, argv, replies);
+    int ret = _rc->batch_exec_script("janus_builtin_paxos_accept.lua", 0, argv, replies);
     if (JANUS_RET_ERR == ret) {
         return JANUS_RET_ERR;
     }
@@ -371,7 +371,7 @@ int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
     argv.push_back(_own_name);
 
     vector<vector<string> > replies;
-    int ret = _rc->batch_exec_script("./lua/janus_renew.lua", 0, argv, replies);
+    int ret = _rc->batch_exec_script("janus_builtin_renew.lua", 0, argv, replies);
     if (JANUS_RET_ERR == ret) {
         return JANUS_RET_ERR;
     }
@@ -442,7 +442,7 @@ int JanusLocker::_do_check(unsigned int& updated_instance_id, unsigned int& upda
     convert.clear();
 
     vector<vector<string> > replies;
-    int ret = _rc->batch_exec_script("./lua/janus_check.lua", 0, argv, replies);
+    int ret = _rc->batch_exec_script("janus_builtin_check.lua", 0, argv, replies);
     if (JANUS_RET_ERR == ret) {
         return JANUS_RET_ERR;
     }

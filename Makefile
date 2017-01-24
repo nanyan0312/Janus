@@ -34,7 +34,7 @@ libjanus.a:
 janus_lock.o: janus_lock.cpp janus_lock.h
 	$(CXX) $(INCPATH) $(CPPFLAGS) $(CXXFLAGS) -c janus_lock.cpp
 
-janus_redis_cluster.o: janus_redis_cluster.cpp janus_redis_cluster.h janus_globals.h
+janus_redis_cluster.o: janus_redis_cluster.cpp janus_redis_cluster.h janus_globals.h janus_builtin_lua.h
 	$(CXX) $(INCPATH) $(CPPFLAGS) $(CXXFLAGS) -c janus_redis_cluster.cpp
 
 janus_locker.o: janus_locker.cpp janus_locker.h janus_lock.h janus_redis_cluster.h janus_globals.h janus_utils.h

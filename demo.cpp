@@ -24,10 +24,6 @@ int main(int argc, char**) {
     jrc.register_node("127.0.0.1", 7771, "pay", "pay");
     jrc.register_node("127.0.0.1", 7772, "pay", "pay");
     jrc.register_node("127.0.0.1", 7773, "pay", "pay");
-    jrc.register_script("./lua/janus_paxos_prepare.lua");
-    jrc.register_script("./lua/janus_paxos_accept.lua");
-    jrc.register_script("./lua/janus_renew.lua");
-    jrc.register_script("./lua/janus_check.lua");
 
     //fork worker to contend for lock
     int i = 0;
@@ -51,8 +47,8 @@ int main(int argc, char**) {
                     continue;
                 }
 
-                //simulate doing work, 0.1 second
-                usleep(10000);
+                //simulate doing work, 0.5 second
+                usleep(500000);
             }
         }
     }
