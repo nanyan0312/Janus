@@ -34,14 +34,15 @@ class JanusLocker {
         int batch_exec_redis_script(string script_pathname, int num_keys, vector<string>& argv, vector<vector<string> >& replies, bool with_lock= false);
 
     private:
-        int _do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value);
+        int _do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value, unsigned int force);
         int _do_paxos_accept(string& proposal_value, unsigned int& updated_instance_id);
         int _do_renew(unsigned int& updated_instance_id);
         int _do_check(unsigned int& updated_instance_id, unsigned int& updated_last_seq_num);
         string _make_locker_name(); 
         void _make_proposal_id(); 
-        unsigned long _make_now_us(); 
-        
+        unsigned long _make_now_us();
+        void _instance_megajump();
+
     private:
         JanusLock *_lock;
         JanusRedisCluster *_rc;
@@ -59,6 +60,8 @@ class JanusLocker {
         unsigned long  _last_fail_time_us;
         unsigned long  _last_renew_time_us;
         unsigned long  _last_check_time_us;
+
+        unsigned int _force_paxos_prepare;
 };
 
 

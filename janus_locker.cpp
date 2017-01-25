@@ -27,6 +27,8 @@ JanusLocker::JanusLocker(const string lock_name, const unsigned long lock_timeou
         _last_fail_time_us = _now_us;
         _last_renew_time_us = _last_fail_time_us; 
         _last_check_time_us = _last_fail_time_us; 
+        
+        _force_paxos_prepare = 1; 
     }
 
 JanusLocker::~JanusLocker() {
@@ -64,10 +66,15 @@ bool JanusLocker::acquire_lock(bool blocking) {
             bool accepted = false;
             string accepted_value;
             _make_proposal_id();
-            int ret = _do_paxos_prepare(updated_instance_id, accepted, accepted_value);
+            int ret = _do_paxos_prepare(updated_instance_id, accepted, accepted_value, _force_paxos_prepare);
+            _force_paxos_prepare = 0;
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
                 cout << getpid() << "----" << "_do_paxos_prepare err" << endl;
                 return false; 
+            } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
+                cout << getpid() << "----" << "_do_paxos_prepare unallowed " << updated_instance_id << endl;
+                _instance_megajump();
+                continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, jump to that instance next time*/
                 cout << getpid() << "----" << "_do_paxos_prepare update " << updated_instance_id << endl;
                 _instance_id = updated_instance_id;
@@ -78,6 +85,10 @@ bool JanusLocker::acquire_lock(bool blocking) {
                 if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
                     cout << getpid() << "----" << "_do_paxos_accept err" << endl;
                     return false; 
+                } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
+                    cout << getpid() << "----" << "_do_paxos_accept unallowed " << updated_instance_id << endl;
+                    _instance_megajump();
+                    continue;/*start next round immediately*/
                 } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, jump to that instance next time*/
                     cout << getpid() << "----" << "_do_paxos_accept update " << updated_instance_id << endl;
                     _instance_id = updated_instance_id;
@@ -111,6 +122,11 @@ bool JanusLocker::acquire_lock(bool blocking) {
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
                 cout << getpid() << "----" << "_do_renew err" << endl;
                 return false; 
+            } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
+                cout << getpid() << "----" << "_do_paxos_renew unallowed " << updated_instance_id << endl;
+                _own_state = LOOKING;
+                _instance_megajump();
+                continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, become LOOKING, jump to that instance next time*/
                 cout << getpid() << "----" << "_do_renew update " << updated_instance_id << endl;
                 _instance_id = updated_instance_id;
@@ -134,6 +150,11 @@ bool JanusLocker::acquire_lock(bool blocking) {
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
                 cout << getpid() << "----" << "_do_check err" << endl;
                 return false; 
+            } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
+                cout << getpid() << "----" << "_do_check unallowed " << updated_instance_id << endl;
+                _own_state = LOOKING;
+                _instance_megajump();
+                continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, become LOOKING, jump to that instance next time*/
                 cout << getpid() << "----" << "_do_check update " << updated_instance_id << endl;
                 _own_state = LOOKING;
@@ -218,7 +239,7 @@ int JanusLocker::batch_exec_redis_script(string script_pathname, int num_keys, v
     }
 
     /*if has lockcheck, make sure all lockchecks passed on all redis nodes*/
-    bool error = false;
+    bool nolock = false;
     unsigned int vec_vec_size = replies.size();
     vector<string> reply;
     unsigned int vec_size;
@@ -227,19 +248,19 @@ int JanusLocker::batch_exec_redis_script(string script_pathname, int num_keys, v
         vec_size = reply.size();
         if (2 == vec_size && JANUS_LUA_ERRNO_ERROR == reply[0]
                 && JANUS_BUILTIN_ATOMIC_LOCKCHECK_FAILED == reply[1].substr(0, strlen(JANUS_BUILTIN_ATOMIC_LOCKCHECK_FAILED))) {
-            error = true;
+            nolock = true;
             break;
         }
     }
 
-    if (true == error) {
-        return JANUS_RET_ERR;
+    if (true == nolock) {
+        return JANUS_RET_NOLOCK;
     }
 
     return JANUS_RET_OK; 
 }
 
-int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value) {
+int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value, unsigned int force) {
     vector<string> argv;
     stringstream convert;
 
@@ -260,6 +281,11 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
     convert.str(string());
     convert.clear();
 
+    convert << force;
+    argv.push_back(convert.str());
+    convert.str(string());
+    convert.clear();
+
     vector<vector<string> > replies;
     int ret = _rc->batch_exec_script("janus_builtin_paxos_prepare.lua", 0, argv, replies);
     if (JANUS_RET_ERR == ret) {
@@ -269,14 +295,17 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
     /*
      * parse paxos prepare result:
      * 1)if any error, return JANUS_RET_ERR
-     * 2)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
-     * 3)if got less than majority oks, return JANUS_RET_REJECT
-     * 4)if got majority oks, record accepted proposal if any exists
+     * 2)if any node unallowed, meaning it might forget important made decisions, 
+     *   force a megajumped new instance to make these irrelevant, return JANUS_RET_UNALLOWED
+     * 3)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
+     * 4)if got less than majority oks, return JANUS_RET_REJECT
+     * 5)if got majority oks, record accepted proposal if any exists
      *   if multiple accepted proposals, choose one with largest proposal id
      */
     unsigned int ok = 0;
-    bool update = false;
     bool error = false;
+    bool unallowed = false;
+    bool update = false;
     accepted = false;
     unsigned long accepted_proposal_id[2] = {0};
     unsigned long largest_proposal_id[2] = {0};
@@ -292,6 +321,9 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
 
         if (JANUS_LUA_ERRNO_ERROR == reply[0]) {
             error = true;
+            break;
+        } else if (JANUS_LUA_ERRNO_UNALLOWED == reply[0]) {
+            unallowed = true;
             break;
         } else if (JANUS_LUA_ERRNO_UPDATE == reply[0]) {
             if (3 == vec_size && false == reply[2].empty()) {
@@ -324,6 +356,8 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
 
     if (true == error) {
         return JANUS_RET_ERR;
+    } else if (true == unallowed) {
+        return JANUS_RET_UNALLOWED;
     } else if (true == update) {
         return JANUS_RET_UPDATE;
     } else if (ok < _rc->get_cluster_size() / 2) {
@@ -365,13 +399,16 @@ int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_
     /*
      * parse paxos accept result:
      * 1)if any error, return JANUS_RET_ERR
-     * 2)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
-     * 3)if got less than majority oks, return JANUS_RET_REJECT
-     * 4)if got majority oks, proposal accepted, return JANUS_RET_OK
+     * 2)if any node unallowed, meaning it might forget important made decisions, 
+     *   force a megajumped new instance to make these irrelevant, return JANUS_RET_UNALLOWED
+     * 3)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
+     * 4)if got less than majority oks, return JANUS_RET_REJECT
+     * 5)if got majority oks, proposal accepted, return JANUS_RET_OK
      */
     unsigned int ok = 0;
-    bool update = false;
     bool error = false;
+    bool unallowed = false;
+    bool update = false;
     unsigned int vec_vec_size = replies.size();
     vector<string> reply;
     unsigned int vec_size;
@@ -384,6 +421,9 @@ int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_
 
         if (JANUS_LUA_ERRNO_ERROR == reply[0]) {
             error = true;
+            break;
+        } else if (JANUS_LUA_ERRNO_UNALLOWED == reply[0]) {
+            unallowed = true;
             break;
         } else if (JANUS_LUA_ERRNO_UPDATE == reply[0]) {
             if (3 == vec_size && false == reply[2].empty()) {
@@ -402,6 +442,8 @@ int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_
 
     if (true == error) {
         return JANUS_RET_ERR;
+    } else if (true == unallowed) {
+        return JANUS_RET_UNALLOWED;
     } else if (true == update) {
         return JANUS_RET_UPDATE;
     } else if (ok < _rc->get_cluster_size() / 2) {
@@ -433,13 +475,16 @@ int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
     /*
      * parse renew result:
      * 1)if any error, return JANUS_RET_ERR
-     * 2)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
-     * 3)if got less than majority oks, return JANUS_RET_REJECT
-     * 4)if got majority oks, renewal succeeds, return JANUS_RET_OK
+     * 2)if any node unallowed, meaning it might forget important made decisions, 
+     *   force a megajumped new instance to make these irrelevant, return JANUS_RET_UNALLOWED
+     * 3)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
+     * 4)if got less than majority oks, return JANUS_RET_REJECT
+     * 5)if got majority oks, renewal succeeds, return JANUS_RET_OK
      */
     unsigned int ok = 0;
-    bool update = false;
     bool error = false;
+    bool unallowed = false;
+    bool update = false;
     unsigned int vec_vec_size = replies.size();
     vector<string> reply;
     unsigned int vec_size;
@@ -452,6 +497,9 @@ int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
 
         if (JANUS_LUA_ERRNO_ERROR == reply[0]) {
             error = true;
+            break;
+        } else if (JANUS_LUA_ERRNO_UNALLOWED == reply[0]) {
+            unallowed = true;
             break;
         } else if (JANUS_LUA_ERRNO_UPDATE == reply[0]) {
             if (3 == vec_size && false == reply[2].empty()) {
@@ -470,6 +518,8 @@ int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
 
     if (true == error) {
         return JANUS_RET_ERR;
+    } else if (true == unallowed) {
+        return JANUS_RET_UNALLOWED;
     } else if (true == update) {
         return JANUS_RET_UPDATE;
     } else if (ok < _rc->get_cluster_size() / 2) {
@@ -504,13 +554,16 @@ int JanusLocker::_do_check(unsigned int& updated_instance_id, unsigned int& upda
     /*
      * parse check result:
      * 1)if any error, return JANUS_RET_ERR
-     * 2)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
-     * 3)if got less than majority oks, return JANUS_RET_REJECT
-     * 4)if got majority oks, record the smallest updated seq_num, return JANUS_RET_OK
+     * 2)if any node unallowed, meaning it might forget important made decisions, 
+     *   force a megajumped new instance to make these irrelevant, return JANUS_RET_UNALLOWED
+     * 3)if any higher instance exists, return JANUS_RET_UPDATE, along with the updated instance id
+     * 4)if got less than majority oks, return JANUS_RET_REJECT
+     * 5)if got majority oks, record the smallest updated seq_num, return JANUS_RET_OK
      */
     unsigned int ok = 0;
-    bool update = false;
     bool error = false;
+    bool unallowed = false;
+    bool update = false;
     unsigned int tmp_seq_num, min_seq_num = UINT_MAX;
     unsigned int vec_vec_size = replies.size();
     vector<string> reply;
@@ -524,6 +577,9 @@ int JanusLocker::_do_check(unsigned int& updated_instance_id, unsigned int& upda
 
         if (JANUS_LUA_ERRNO_ERROR == reply[0]) {
             error = true;
+            break;
+        } else if (JANUS_LUA_ERRNO_UNALLOWED == reply[0]) {
+            unallowed = true;
             break;
         } else if (JANUS_LUA_ERRNO_UPDATE == reply[0]) {
             if (3 == vec_size && false == reply[2].empty()) {
@@ -547,6 +603,8 @@ int JanusLocker::_do_check(unsigned int& updated_instance_id, unsigned int& upda
 
     if (true == error) {
         return JANUS_RET_ERR;
+    } else if (true == unallowed) {
+        return JANUS_RET_UNALLOWED;
     } else if (true == update) {
         return JANUS_RET_UPDATE;
     } else if (ok < _rc->get_cluster_size() / 2) {
@@ -577,6 +635,12 @@ unsigned long JanusLocker::_make_now_us() {
     return convert_timeval_to_us(&tv);
 }
 
+void JanusLocker::_instance_megajump() {
+    int t = time(NULL);
+    _instance_id += (-1 != t) ? (unsigned int) t : JANUS_INSTANCE_ID_MEGAJUMP;
+    _force_paxos_prepare = 1;
+    return;
+}
 
 
 /* vim: set expandtab ts=4 sw=4 sts=4 tw=100: */
