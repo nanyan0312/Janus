@@ -3,7 +3,5 @@ a Distributed Locking Library based on Paxos and Redis - designed and coded by N
 
 # Run Demo:
 make
-
 ./output/bin/demo
-
 make clean
