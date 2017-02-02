@@ -62,38 +62,30 @@ bool JanusLocker::acquire_lock(bool blocking) {
             }
 
             /*paxos prepare phase*/
-            unsigned int updated_instance_id;
+            unsigned long updated_instance_id;
             bool accepted = false;
             string accepted_value;
             _make_proposal_id();
             int ret = _do_paxos_prepare(updated_instance_id, accepted, accepted_value, _force_paxos_prepare);
             _force_paxos_prepare = 0;
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
-                cout << getpid() << "----" << "_do_paxos_prepare err" << endl;
                 return false; 
             } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
-                cout << getpid() << "----" << "_do_paxos_prepare unallowed " << updated_instance_id << endl;
                 _instance_megajump();
                 continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, jump to that instance next time*/
-                cout << getpid() << "----" << "_do_paxos_prepare update " << updated_instance_id << endl;
                 _instance_id = updated_instance_id;
             } else if (JANUS_RET_OK == ret) {/*got majority oks, proceeed to paxos accept phase*/
-                cout << getpid() << "----" << "_do_paxos_prepare ok accepted_value:" << accepted_value << endl;
                 string proposal_value = (true == accepted) ? accepted_value : _own_name;
                 ret = _do_paxos_accept(proposal_value, updated_instance_id);
                 if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
-                    cout << getpid() << "----" << "_do_paxos_accept err" << endl;
                     return false; 
                 } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
-                    cout << getpid() << "----" << "_do_paxos_accept unallowed " << updated_instance_id << endl;
                     _instance_megajump();
                     continue;/*start next round immediately*/
                 } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, jump to that instance next time*/
-                    cout << getpid() << "----" << "_do_paxos_accept update " << updated_instance_id << endl;
                     _instance_id = updated_instance_id;
                 } else if (JANUS_RET_OK == ret) {/*got majority oks, meaning proposal accepted, lets check it*/
-                    cout << getpid() << "----" << "_do_paxos_accept ok proposal_value:" << proposal_value << endl;
                     if (_own_name == proposal_value) {
                         _own_state = LEADING;
                         _last_renew_time_us = _make_now_us();
@@ -104,11 +96,9 @@ bool JanusLocker::acquire_lock(bool blocking) {
                         _last_seq_num = 0;
                     }
                 } else {/*accept phase failed, try with higher proposal id next time*/
-                    cout << getpid() << "----" << "_do_paxos_accept failed" << endl;
                     _last_fail_time_us = _make_now_us();
                 }
             } else {/*prepare phase failed, try with higher proposal id next time*/
-                cout << getpid() << "----" << "_do_paxos_prepare failed" << endl;
                 _last_fail_time_us = _make_now_us();
             }
         } else if (LEADING == _own_state) {
@@ -117,26 +107,21 @@ bool JanusLocker::acquire_lock(bool blocking) {
             }
 
             /*renew lock ownership, this is the only chance a seq_num gets incremented*/
-            unsigned int updated_instance_id;
+            unsigned long updated_instance_id;
             int ret = _do_renew(updated_instance_id);
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
-                cout << getpid() << "----" << "_do_renew err" << endl;
                 return false; 
             } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
-                cout << getpid() << "----" << "_do_paxos_renew unallowed " << updated_instance_id << endl;
                 _own_state = LOOKING;
                 _instance_megajump();
                 continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, become LOOKING, jump to that instance next time*/
-                cout << getpid() << "----" << "_do_renew update " << updated_instance_id << endl;
                 _instance_id = updated_instance_id;
             } else if (JANUS_RET_OK == ret) {/*got majority oks, renewal successful*/
-                cout << getpid() << "----" << "_do_renew ok " << endl;
                 _last_renew_time_us = _make_now_us();
                 return true;/*still got that shit, go to work*/
             }
 
-            cout << getpid() << "----" << "_do_renew failed " << endl;
             _own_state = LOOKING;/*failed, give up lock voluntarily*/
         } else if (FOLLOWING == _own_state) {
             if (lock_timeout_check_us > (_now_us - _last_check_time_us)) {
@@ -144,27 +129,22 @@ bool JanusLocker::acquire_lock(bool blocking) {
             }
 
             /*check if lock owner still alive*/
-            unsigned int updated_instance_id;
+            unsigned long updated_instance_id;
             unsigned int updated_last_seq_num;
             int ret = _do_check(updated_instance_id, updated_last_seq_num);
             if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
-                cout << getpid() << "----" << "_do_check err" << endl;
                 return false; 
             } else if (JANUS_RET_UNALLOWED == ret) {/*some nodes might restart, force a new megajumped instance*/
-                cout << getpid() << "----" << "_do_check unallowed " << updated_instance_id << endl;
                 _own_state = LOOKING;
                 _instance_megajump();
                 continue;/*start next round immediately*/
             } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, become LOOKING, jump to that instance next time*/
-                cout << getpid() << "----" << "_do_check update " << updated_instance_id << endl;
                 _own_state = LOOKING;
                 _instance_id = updated_instance_id;
             } else if (JANUS_RET_OK == ret) {/*got majority oks, lock owner still alive*/
-                cout << getpid() << "----" << "_do_check ok " << endl;
                 _last_check_time_us = _make_now_us();
                 _last_seq_num = updated_last_seq_num;
             } else {/*lock owner might be dead, how about me?*/
-                cout << getpid() << "----" << "_do_check failed " << endl;
                 _own_state = LOOKING;
                 _instance_id += 1;
                 continue;/*start next round immediately*/
@@ -186,21 +166,17 @@ bool JanusLocker::renew_lock() {
     }
 
     /*renew lock ownership, this is the only chance a seq_num gets incremented*/
-    unsigned int updated_instance_id;
+    unsigned long updated_instance_id;
     int ret = _do_renew(updated_instance_id);
     if (JANUS_RET_ERR == ret) {/*terminate if unexpected errors happen*/
-        cout << getpid() << "----" << "renew_lock _do_renew err" << endl;
         return false; 
     } else if (JANUS_RET_UPDATE == ret) {/*higher instance exists, deemed as renewal failure*/
-        cout << getpid() << "----" << "renew_lock _do_renew update " << updated_instance_id << endl;
         _instance_id = updated_instance_id;
     } else if (JANUS_RET_OK == ret) {/*got majority oks, renewal successful*/
-        cout << getpid() << "----" << "renew_lock _do_renew ok " << endl;
         _last_renew_time_us = _make_now_us();
         return true;/*still got that shit, go to work*/
     }
 
-    cout << getpid() << "----" << "_do_renew failed " << endl;
     _own_state = LOOKING;/*failed, give up lock voluntarily*/
     return false;
 }
@@ -260,7 +236,7 @@ int JanusLocker::batch_exec_redis_script(string script_pathname, int num_keys, v
     return JANUS_RET_OK; 
 }
 
-int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& accepted, string& accepted_value, unsigned int force) {
+int JanusLocker::_do_paxos_prepare(unsigned long& updated_instance_id, bool& accepted, string& accepted_value, unsigned int force) {
     vector<string> argv;
     stringstream convert;
 
@@ -367,7 +343,7 @@ int JanusLocker::_do_paxos_prepare(unsigned int& updated_instance_id, bool& acce
     return JANUS_RET_OK;
 }
 
-int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_instance_id) {
+int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned long& updated_instance_id) {
     vector<string> argv;
     stringstream convert;
 
@@ -453,7 +429,7 @@ int JanusLocker::_do_paxos_accept(string& proposal_value, unsigned int& updated_
     return JANUS_RET_OK;
 }
 
-int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
+int JanusLocker::_do_renew(unsigned long& updated_instance_id) {
     vector<string> argv;
     stringstream convert;
 
@@ -529,7 +505,7 @@ int JanusLocker::_do_renew(unsigned int& updated_instance_id) {
     return JANUS_RET_OK;
 }
 
-int JanusLocker::_do_check(unsigned int& updated_instance_id, unsigned int& updated_last_seq_num) {
+int JanusLocker::_do_check(unsigned long& updated_instance_id, unsigned int& updated_last_seq_num) {
     vector<string> argv;
     stringstream convert;
 
@@ -637,7 +613,7 @@ unsigned long JanusLocker::_make_now_us() {
 
 void JanusLocker::_instance_megajump() {
     int t = time(NULL);
-    _instance_id += (-1 != t) ? (unsigned int) t : JANUS_INSTANCE_ID_MEGAJUMP;
+    _instance_id = (-1 != t) ? (unsigned long) t : JANUS_INSTANCE_ID_MEGAJUMP;
     _force_paxos_prepare = 1;
     return;
 }
